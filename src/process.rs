@@ -1,12 +1,14 @@
 //! Snapshot of running processes and their parent/child relations.
 
-use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE};
+use windows::Win32::Foundation::FILETIME;
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Threading::{
     GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
 };
+
+use crate::handle::OwnedHandle;
 
 /// Information about one running process.
 #[derive(Debug, Clone)]
@@ -109,15 +111,4 @@ fn start_time(pid: u32) -> Option<u64> {
 fn utf16_until_nul(buf: &[u16]) -> String {
     let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
     String::from_utf16_lossy(&buf[..len])
-}
-
-/// A Windows handle that is closed automatically when dropped.
-struct OwnedHandle(HANDLE);
-
-impl Drop for OwnedHandle {
-    fn drop(&mut self) {
-        // SAFETY: the handle is owned by this struct and closed exactly once.
-        // A failure to close can't be handled meaningfully here, so it's ignored.
-        let _ = unsafe { CloseHandle(self.0) };
-    }
 }
