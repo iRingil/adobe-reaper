@@ -18,7 +18,7 @@ const POLL_INTERVAL: Duration = Duration::from_secs(10);
 
 /// How long an app may stay without windows before it is finished off
 /// (it may still be writing files).
-const GRACE_PERIOD: Duration = Duration::from_secs(30);
+const GRACE_PERIOD: Duration = Duration::from_secs(20);
 
 /// Lifecycle of a watched app process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -261,9 +261,10 @@ mod tests {
         let mut w = Watcher::default();
 
         w.update(&ps, &windows(&[100]), t0);
-        w.update(&ps, &windows(&[]), t0 + secs(10)); // windows disappear
-        let early = w.update(&ps, &windows(&[]), t0 + secs(30));
-        let late = w.update(&ps, &windows(&[]), t0 + secs(40));
+        let gone = t0 + secs(10);
+        w.update(&ps, &windows(&[]), gone); // windows disappear
+        let early = w.update(&ps, &windows(&[]), gone + GRACE_PERIOD - secs(1));
+        let late = w.update(&ps, &windows(&[]), gone + GRACE_PERIOD);
 
         assert!(reaped_pids(&early).is_empty());
         assert_eq!(reaped_pids(&late), vec![100]);
@@ -277,8 +278,8 @@ mod tests {
 
         w.update(&ps, &windows(&[100]), t0);
         w.update(&ps, &windows(&[]), t0 + secs(10));
-        w.update(&ps, &windows(&[100]), t0 + secs(20)); // a window is back
-        let events = w.update(&ps, &windows(&[]), t0 + secs(45));
+        w.update(&ps, &windows(&[100]), t0 + secs(15)); // a window is back
+        let events = w.update(&ps, &windows(&[]), t0 + secs(10) + GRACE_PERIOD);
 
         assert!(reaped_pids(&events).is_empty());
     }
@@ -334,7 +335,7 @@ mod tests {
 
         w.update(&ps, &windows(&[100, 110]), t0);
         w.update(&ps, &windows(&[110]), t0 + secs(10));
-        let events = w.update(&ps, &windows(&[110]), t0 + secs(40));
+        let events = w.update(&ps, &windows(&[110]), t0 + secs(10) + GRACE_PERIOD);
 
         assert_eq!(reaped_pids(&events), vec![100]);
         assert!(!has_cleanup(&events));
