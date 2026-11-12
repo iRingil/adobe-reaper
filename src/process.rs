@@ -68,11 +68,20 @@ pub fn snapshot() -> windows::core::Result<Vec<ProcessInfo>> {
 }
 
 /// Returns all descendants of `root` (children, grandchildren, ...).
-pub fn descendants<'a>(all: &'a [ProcessInfo], root: &'a ProcessInfo) -> Vec<&'a ProcessInfo> {
+///
+/// Processes for which `skip` returns `true` are left out together with their own descendants.
+pub fn descendants<'a>(
+    all: &'a [ProcessInfo],
+    root: &'a ProcessInfo,
+    skip: impl Fn(&ProcessInfo) -> bool,
+) -> Vec<&'a ProcessInfo> {
     let mut result = Vec::new();
     let mut to_visit = vec![root];
     while let Some(parent) = to_visit.pop() {
         for child in all.iter().filter(|p| p.is_child_of(parent)) {
+            if skip(child) {
+                continue;
+            }
             result.push(child);
             to_visit.push(child);
         }
