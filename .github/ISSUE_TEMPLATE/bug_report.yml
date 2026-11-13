@@ -1,0 +1,65 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please search existing issues first.
+        Adobe Reaper is an unofficial tool and is not affiliated with Adobe.
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: The commit you built from (`git rev-parse --short HEAD`).
+      placeholder: 1a2b3c4
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 24H2
+    validations:
+      required: true
+  - type: input
+    id: apps
+    attributes:
+      label: Adobe apps and versions
+      description: The apps that were running, and which of them were started through Adobe Reaper.
+      placeholder: "Photoshop 2020 (21.2), Premiere Pro 2020 (14.3)"
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: E.g. a process was left hanging, or an app with an open window was killed.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start ... from its shortcut
+        2. Close ...
+  - type: textarea
+    id: processes
+    attributes:
+      label: Process tree
+      description: |
+        The Adobe processes left over, with their parents, e.g. from Process Explorer.
+        The output of a debug build (`cargo run -- "<path to the app>"`) helps a lot.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and this is not a duplicate
+          required: true

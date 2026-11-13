@@ -2,6 +2,14 @@
 name = "adobe-reaper"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+description = "Invisible launcher for Adobe 2020 apps that finishes off the processes they leave hanging after closing"
+license = "MIT"
+repository = "https://github.com/iRingil/adobe-reaper"
+readme = "README.md"
+keywords = ["adobe", "photoshop", "windows", "process", "cleanup"]
+categories = ["command-line-utilities"]
+publish = false
 
 [dependencies]
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
