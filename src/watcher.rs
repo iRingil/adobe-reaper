@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::apps;
-use crate::process::{self, ProcessInfo};
+use crate::process::{self, ProcessInfo, Termination};
 use crate::window;
 
 /// How often the watcher polls processes and windows.
@@ -19,6 +19,9 @@ const POLL_INTERVAL: Duration = Duration::from_secs(10);
 /// How long an app may stay without windows before it is finished off
 /// (it may still be writing files).
 const GRACE_PERIOD: Duration = Duration::from_secs(20);
+
+/// How long to wait after asking processes to close before terminating them.
+const SOFT_CLOSE_WAIT: Duration = Duration::from_secs(5);
 
 /// Lifecycle of a watched app process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,9 +75,11 @@ pub enum Event {
         to: AppState,
     },
     /// An app must be finished off: the app itself first, then its descendants.
+    /// Repeated on every poll while the app is still alive.
     ReapApp { tree: Vec<ProcessInfo> },
-    /// No app is left: shared services must be finished off, then the watcher exits.
-    CleanUp { services: Vec<ProcessInfo> },
+    /// No app seems to be left: shared services should be finished off and the watcher
+    /// should exit. The caller must recheck this on a fresh snapshot first.
+    CleanUp,
 }
 
 /// Identifies a process across polls. PIDs are reused, so the start time is part of the key.
@@ -130,11 +135,12 @@ impl Watcher {
                     from: old,
                     to: new,
                 });
-                if new == AppState::Reaped {
-                    events.push(Event::ReapApp {
-                        tree: app_tree(processes, app),
-                    });
-                }
+            }
+            // An app that is still alive after being reaped is reaped again.
+            if new == AppState::Reaped {
+                events.push(Event::ReapApp {
+                    tree: app_tree(processes, app),
+                });
             }
         }
 
@@ -142,17 +148,13 @@ impl Watcher {
         self.apps.retain(|key, _| alive.contains(key));
 
         if self.apps.values().all(|state| *state == AppState::Reaped) {
-            events.push(Event::CleanUp {
-                services: shared_services_tree(processes),
-            });
+            events.push(Event::CleanUp);
         }
         events
     }
 }
 
 /// Runs the watcher until no Adobe app is left.
-///
-/// Dry-run mode: decisions are only printed, nothing is killed.
 ///
 /// # Errors
 ///
@@ -174,18 +176,41 @@ pub fn run() -> windows::core::Result<()> {
                     Some(from) => println!("{pid:>6}  {exe_name}: {from} -> {to}"),
                     None => println!("{pid:>6}  {exe_name}: {to}"),
                 },
-                Event::ReapApp { tree } => {
-                    println!("[dry run] would reap:");
-                    print_processes(&tree);
-                }
-                Event::CleanUp { services } => {
-                    println!("[dry run] no apps left, would kill shared services:");
-                    print_processes(&services);
-                    return Ok(());
+                Event::ReapApp { tree } => reap(&tree),
+                Event::CleanUp => {
+                    // The apps were probably killed a moment ago, and a new one may have
+                    // been started meanwhile, so decide on a fresh snapshot.
+                    let fresh = process::snapshot()?;
+                    if fresh.iter().any(|p| apps::is_main_app(&p.exe_name)) {
+                        println!("An app is still around, shared services stay for now");
+                    } else {
+                        println!("No apps left, finishing off shared services");
+                        reap(&shared_services_tree(&fresh));
+                        return Ok(());
+                    }
                 }
             }
         }
         thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Asks the processes to close, waits a bit, then terminates the ones still alive.
+///
+/// `tree` is ordered parent first, so the parent can't respawn its children.
+fn reap(tree: &[ProcessInfo]) {
+    let pids: HashSet<u32> = tree.iter().map(|p| p.pid).collect();
+    if let Err(e) = window::post_close(&pids) {
+        eprintln!("Failed to post WM_CLOSE: {e}");
+    }
+    thread::sleep(SOFT_CLOSE_WAIT);
+
+    for p in tree {
+        match process::terminate(p) {
+            Ok(Termination::Terminated) => println!("{:>6}  {}: killed", p.pid, p.exe_name),
+            Ok(Termination::AlreadyGone) => println!("{:>6}  {}: exited", p.pid, p.exe_name),
+            Err(e) => eprintln!("{:>6}  {}: failed to kill: {e}", p.pid, p.exe_name),
+        }
     }
 }
 
@@ -210,12 +235,6 @@ fn shared_services_tree(processes: &[ProcessInfo]) -> Vec<ProcessInfo> {
         .filter(|p| apps::is_shared_service(&p.exe_name))
         .flat_map(|service| app_tree(processes, service))
         .collect()
-}
-
-fn print_processes(processes: &[ProcessInfo]) {
-    for p in processes {
-        println!("{:>6}    - {}", p.pid, p.exe_name);
-    }
 }
 
 #[cfg(test)]
@@ -251,7 +270,7 @@ mod tests {
     }
 
     fn has_cleanup(events: &[Event]) -> bool {
-        events.iter().any(|e| matches!(e, Event::CleanUp { .. }))
+        events.iter().any(|e| matches!(e, Event::CleanUp))
     }
 
     #[test]
@@ -317,11 +336,33 @@ mod tests {
 
         let events = w.update(&ps, &windows(&[]), Instant::now());
 
-        let Some(Event::CleanUp { services }) = events.last() else {
-            panic!("expected CleanUp, got {events:?}");
-        };
-        let pids: Vec<u32> = services.iter().map(|p| p.pid).collect();
-        assert_eq!(pids, vec![200, 201]);
+        assert!(has_cleanup(&events));
+    }
+
+    #[test]
+    fn shared_services_tree_includes_their_children() {
+        let ps = vec![
+            proc(200, 1, "CCXProcess.exe"),
+            proc(201, 200, "node.exe"),
+            proc(210, 1, "CoreSync.exe"),
+            proc(300, 1, "notepad.exe"),
+        ];
+        let pids: Vec<u32> = shared_services_tree(&ps).iter().map(|p| p.pid).collect();
+        assert_eq!(pids, vec![200, 201, 210]);
+    }
+
+    #[test]
+    fn reap_is_repeated_while_the_app_is_alive() {
+        let ps = vec![proc(100, 1, "Photoshop.exe")];
+        let t0 = Instant::now();
+        let mut w = Watcher::default();
+
+        w.update(&ps, &windows(&[100]), t0);
+        w.update(&ps, &windows(&[]), t0 + secs(10));
+        w.update(&ps, &windows(&[]), t0 + secs(10) + GRACE_PERIOD);
+        let retry = w.update(&ps, &windows(&[]), t0 + secs(20) + GRACE_PERIOD);
+
+        assert_eq!(reaped_pids(&retry), vec![100]);
     }
 
     #[test]

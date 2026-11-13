@@ -1,10 +1,10 @@
-//! Detection of processes that own visible windows.
+//! Top-level windows: detecting visible ones and asking them to close.
 
 use std::collections::HashSet;
 
-use windows::Win32::Foundation::{HWND, LPARAM, RECT};
+use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible,
+    EnumWindows, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CLOSE,
 };
 use windows::core::BOOL;
 
@@ -15,38 +15,65 @@ use windows::core::BOOL;
 ///
 /// Returns an error if `EnumWindows` fails.
 pub fn pids_with_visible_windows() -> windows::core::Result<HashSet<u32>> {
-    let mut pids = HashSet::new();
-
-    // Smuggle a pointer to `pids` through LPARAM so the callback can fill the set.
-    let lparam = LPARAM(&raw mut pids as isize);
-
-    // SAFETY: `pids` lives until the end of this function, and EnumWindows
-    // calls the callback synchronously, before returning.
-    unsafe { EnumWindows(Some(collect_pid), lparam) }?;
-
-    Ok(pids)
+    Ok(top_level_windows()?
+        .into_iter()
+        .filter(|&hwnd| is_visible_with_size(hwnd))
+        .filter_map(owner_pid)
+        .collect())
 }
 
-/// `EnumWindows` callback: adds the owner PID of every visible window to the set.
+/// Asks every top-level window (visible or not) of the given processes to close.
+///
+/// The message is posted, not sent, so a hung app can't block the caller.
+///
+/// # Errors
+///
+/// Returns an error if `EnumWindows` fails.
+pub fn post_close(pids: &HashSet<u32>) -> windows::core::Result<()> {
+    for hwnd in top_level_windows()? {
+        if owner_pid(hwnd).is_some_and(|pid| pids.contains(&pid)) {
+            // SAFETY: posting a message has no memory-safety requirements.
+            // A failure means the window is already gone, so it's ignored.
+            let _ = unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) };
+        }
+    }
+    Ok(())
+}
+
+/// Returns all top-level windows.
+fn top_level_windows() -> windows::core::Result<Vec<HWND>> {
+    let mut handles = Vec::new();
+
+    // Smuggle a pointer to `handles` through LPARAM so the callback can fill the list.
+    let lparam = LPARAM(&raw mut handles as isize);
+
+    // SAFETY: `handles` lives until the end of this function, and EnumWindows
+    // calls the callback synchronously, before returning.
+    unsafe { EnumWindows(Some(collect_window), lparam) }?;
+
+    Ok(handles)
+}
+
+/// `EnumWindows` callback: adds every window to the list.
 ///
 /// Always returns `true` to continue the enumeration.
 ///
 /// # Safety
 ///
-/// `lparam` must hold a valid, exclusive `*mut HashSet<u32>`.
-unsafe extern "system" fn collect_pid(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    if is_visible_with_size(hwnd) {
-        let mut pid = 0;
-        // SAFETY: `pid` is a valid place to write to.
-        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-
-        if pid != 0 {
-            // SAFETY: guaranteed by the caller (see `pids_with_visible_windows`).
-            let pids = unsafe { &mut *(lparam.0 as *mut HashSet<u32>) };
-            pids.insert(pid);
-        }
-    }
+/// `lparam` must hold a valid, exclusive `*mut Vec<HWND>`.
+unsafe extern "system" fn collect_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    // SAFETY: guaranteed by the caller (see `top_level_windows`).
+    let handles = unsafe { &mut *(lparam.0 as *mut Vec<HWND>) };
+    handles.push(hwnd);
     true.into()
+}
+
+/// Returns the PID of the process that owns the window.
+fn owner_pid(hwnd: HWND) -> Option<u32> {
+    let mut pid = 0;
+    // SAFETY: `pid` is a valid place to write to; an invalid HWND leaves it at 0.
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    (pid != 0).then_some(pid)
 }
 
 /// Checks that the window is visible and has a non-zero size.

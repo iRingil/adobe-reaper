@@ -1,14 +1,29 @@
-//! Snapshot of running processes and their parent/child relations.
+//! Snapshot of running processes, their parent/child relations, and termination.
 
-use windows::Win32::Foundation::FILETIME;
+use std::time::Duration;
+
+use windows::Win32::Foundation::{ERROR_INVALID_PARAMETER, FILETIME, WAIT_OBJECT_0};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Threading::{
-    GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    PROCESS_TERMINATE, TerminateProcess, WaitForSingleObject,
 };
 
 use crate::handle::OwnedHandle;
+
+/// How long to wait for a terminated process to actually disappear.
+const EXIT_WAIT: Duration = Duration::from_secs(5);
+
+/// Result of a [`terminate`] call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Termination {
+    /// The process was terminated by us.
+    Terminated,
+    /// The process had already exited (or its PID now belongs to another process).
+    AlreadyGone,
+}
 
 /// Information about one running process.
 #[derive(Debug, Clone)]
@@ -91,12 +106,56 @@ pub fn descendants<'a>(
     result
 }
 
+/// Terminates the process and waits until it has exited.
+///
+/// The process is identified by PID *and* start time, so a process that reused
+/// the PID is never touched.
+///
+/// # Errors
+///
+/// Returns an error if the process exists but can't be opened or terminated
+/// (e.g. access denied).
+pub fn terminate(process: &ProcessInfo) -> windows::core::Result<Termination> {
+    let access = PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE;
+    // SAFETY: plain WinAPI call; the returned handle is closed by `OwnedHandle`.
+    let handle = match unsafe { OpenProcess(access, false, process.pid) } {
+        Ok(handle) => OwnedHandle(handle),
+        // There is no process with this PID anymore.
+        Err(e) if e.code() == ERROR_INVALID_PARAMETER.to_hresult() => {
+            return Ok(Termination::AlreadyGone);
+        }
+        Err(e) => return Err(e),
+    };
+
+    if start_time_of(&handle) != process.start_time || has_exited(&handle) {
+        return Ok(Termination::AlreadyGone);
+    }
+
+    // SAFETY: `handle` is valid and has PROCESS_TERMINATE access.
+    unsafe { TerminateProcess(handle.0, 1) }?;
+    let millis = u32::try_from(EXIT_WAIT.as_millis()).unwrap_or(u32::MAX);
+    // SAFETY: `handle` is valid and has PROCESS_SYNCHRONIZE access.
+    unsafe { WaitForSingleObject(handle.0, millis) };
+    Ok(Termination::Terminated)
+}
+
+/// Checks whether the process behind `handle` has already exited.
+fn has_exited(handle: &OwnedHandle) -> bool {
+    // SAFETY: `handle` is valid; a zero timeout only checks the state.
+    let state = unsafe { WaitForSingleObject(handle.0, 0) };
+    state == WAIT_OBJECT_0
+}
+
 /// Reads the creation time of a process, or `None` if it can't be opened.
 fn start_time(pid: u32) -> Option<u64> {
     // SAFETY: plain WinAPI call; the returned handle is closed by `OwnedHandle`.
     let handle =
         OwnedHandle(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?);
+    start_time_of(&handle)
+}
 
+/// Reads the creation time of the process behind `handle`.
+fn start_time_of(handle: &OwnedHandle) -> Option<u64> {
     let mut created = FILETIME::default();
     let mut exited = FILETIME::default();
     let mut kernel = FILETIME::default();
