@@ -32,9 +32,11 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+      # The action's ref selects no Rust version, so Dependabot leaves it alone; the version is an input
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: stable
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: rustfmt
@@ -52,7 +54,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Set up Rust 1.88
-        uses: dtolnay/rust-toolchain@1.88
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88"
       - uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo build --locked
