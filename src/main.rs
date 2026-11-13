@@ -10,6 +10,7 @@ mod watcher;
 mod window;
 
 use std::env;
+use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 use std::time::Duration;
@@ -26,6 +27,13 @@ fn main() -> ExitCode {
         eprintln!("Usage: adobe-reaper <path to Adobe app> [app arguments...]");
         return ExitCode::FAILURE;
     };
+
+    // A zombie of the same app would swallow the launch, so it goes first.
+    if let Some(exe_name) = app_path.file_name().and_then(OsStr::to_str)
+        && let Err(e) = watcher::kill_zombies(exe_name)
+    {
+        eprintln!("Failed to look for zombies of {exe_name}: {e}");
+    }
 
     // The remaining arguments go to the app unchanged (e.g. a file to open).
     if let Err(e) = Command::new(&app_path).args(args).spawn() {

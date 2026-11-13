@@ -204,7 +204,41 @@ fn reap(tree: &[ProcessInfo]) {
         eprintln!("Failed to post WM_CLOSE: {e}");
     }
     thread::sleep(SOFT_CLOSE_WAIT);
+    kill_tree(tree);
+}
 
+/// Kills windowless leftovers ("zombies") of the app that is about to be started.
+///
+/// Adobe apps are single-instance: a new launch is handed over to the running
+/// instance, so with a zombie around nothing would open. A windowless instance
+/// at launch time is therefore always treated as a zombie and killed right away.
+/// Executables that are not known Adobe apps are left alone.
+///
+/// # Errors
+///
+/// Returns an error if processes or windows can't be enumerated.
+pub fn kill_zombies(exe_name: &str) -> windows::core::Result<()> {
+    if !apps::is_main_app(exe_name) {
+        return Ok(());
+    }
+    let processes = process::snapshot()?;
+    let with_windows = window::pids_with_visible_windows()?;
+
+    let zombies = processes
+        .iter()
+        .filter(|p| p.exe_name.eq_ignore_ascii_case(exe_name) && !with_windows.contains(&p.pid));
+    for zombie in zombies {
+        println!(
+            "{:>6}  {}: zombie found before launch",
+            zombie.pid, zombie.exe_name
+        );
+        kill_tree(&app_tree(&processes, zombie));
+    }
+    Ok(())
+}
+
+/// Terminates the processes in order, without asking them to close first.
+fn kill_tree(tree: &[ProcessInfo]) {
     for p in tree {
         match process::terminate(p) {
             Ok(Termination::Terminated) => println!("{:>6}  {}: killed", p.pid, p.exe_name),
