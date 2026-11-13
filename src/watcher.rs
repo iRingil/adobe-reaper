@@ -173,8 +173,8 @@ pub fn run() -> windows::core::Result<()> {
                     from,
                     to,
                 } => match from {
-                    Some(from) => println!("{pid:>6}  {exe_name}: {from} -> {to}"),
-                    None => println!("{pid:>6}  {exe_name}: {to}"),
+                    Some(from) => debug_log!("{pid:>6}  {exe_name}: {from} -> {to}"),
+                    None => debug_log!("{pid:>6}  {exe_name}: {to}"),
                 },
                 Event::ReapApp { tree } => reap(&tree),
                 Event::CleanUp => {
@@ -182,9 +182,9 @@ pub fn run() -> windows::core::Result<()> {
                     // been started meanwhile, so decide on a fresh snapshot.
                     let fresh = process::snapshot()?;
                     if fresh.iter().any(|p| apps::is_main_app(&p.exe_name)) {
-                        println!("An app is still around, shared services stay for now");
+                        debug_log!("An app is still around, shared services stay for now");
                     } else {
-                        println!("No apps left, finishing off shared services");
+                        debug_log!("No apps left, finishing off shared services");
                         reap(&shared_services_tree(&fresh));
                         return Ok(());
                     }
@@ -201,7 +201,7 @@ pub fn run() -> windows::core::Result<()> {
 fn reap(tree: &[ProcessInfo]) {
     let pids: HashSet<u32> = tree.iter().map(|p| p.pid).collect();
     if let Err(e) = window::post_close(&pids) {
-        eprintln!("Failed to post WM_CLOSE: {e}");
+        debug_log!("Failed to post WM_CLOSE: {e}");
     }
     thread::sleep(SOFT_CLOSE_WAIT);
     kill_tree(tree);
@@ -228,9 +228,10 @@ pub fn kill_zombies(exe_name: &str) -> windows::core::Result<()> {
         .iter()
         .filter(|p| p.exe_name.eq_ignore_ascii_case(exe_name) && !with_windows.contains(&p.pid));
     for zombie in zombies {
-        println!(
+        debug_log!(
             "{:>6}  {}: zombie found before launch",
-            zombie.pid, zombie.exe_name
+            zombie.pid,
+            zombie.exe_name
         );
         kill_tree(&app_tree(&processes, zombie));
     }
@@ -241,9 +242,9 @@ pub fn kill_zombies(exe_name: &str) -> windows::core::Result<()> {
 fn kill_tree(tree: &[ProcessInfo]) {
     for p in tree {
         match process::terminate(p) {
-            Ok(Termination::Terminated) => println!("{:>6}  {}: killed", p.pid, p.exe_name),
-            Ok(Termination::AlreadyGone) => println!("{:>6}  {}: exited", p.pid, p.exe_name),
-            Err(e) => eprintln!("{:>6}  {}: failed to kill: {e}", p.pid, p.exe_name),
+            Ok(Termination::Terminated) => debug_log!("{:>6}  {}: killed", p.pid, p.exe_name),
+            Ok(Termination::AlreadyGone) => debug_log!("{:>6}  {}: exited", p.pid, p.exe_name),
+            Err(e) => debug_log!("{:>6}  {}: failed to kill: {e}", p.pid, p.exe_name),
         }
     }
 }

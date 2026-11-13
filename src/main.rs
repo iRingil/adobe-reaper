@@ -2,6 +2,20 @@
 //!
 //! Usage: `adobe-reaper <path to Adobe app> [app arguments...]`
 
+// Release builds run without a console window. Debug builds (`cargo run`) keep it.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+/// Prints a line to stderr in debug builds; release builds print nothing.
+///
+/// Defined before the `mod` declarations so that all modules can use it.
+macro_rules! debug_log {
+    ($($arg:tt)*) => {
+        if cfg!(debug_assertions) {
+            eprintln!($($arg)*);
+        }
+    };
+}
+
 mod apps;
 mod handle;
 mod process;
@@ -24,7 +38,7 @@ fn main() -> ExitCode {
     // `args_os` instead of `args`: a Windows path is not guaranteed to be valid UTF-8.
     let mut args = env::args_os().skip(1);
     let Some(app_path) = args.next().map(PathBuf::from) else {
-        eprintln!("Usage: adobe-reaper <path to Adobe app> [app arguments...]");
+        debug_log!("Usage: adobe-reaper <path to Adobe app> [app arguments...]");
         return ExitCode::FAILURE;
     };
 
@@ -32,12 +46,12 @@ fn main() -> ExitCode {
     if let Some(exe_name) = app_path.file_name().and_then(OsStr::to_str)
         && let Err(e) = watcher::kill_zombies(exe_name)
     {
-        eprintln!("Failed to look for zombies of {exe_name}: {e}");
+        debug_log!("Failed to look for zombies of {exe_name}: {e}");
     }
 
     // The remaining arguments go to the app unchanged (e.g. a file to open).
     if let Err(e) = Command::new(&app_path).args(args).spawn() {
-        eprintln!("Failed to start {}: {e}", app_path.display());
+        debug_log!("Failed to start {}: {e}", app_path.display());
         return ExitCode::FAILURE;
     }
 
@@ -46,17 +60,17 @@ fn main() -> ExitCode {
     let _lock = match WatcherLock::acquire(WATCHER_HANDOVER_WAIT) {
         Ok(Some(lock)) => lock,
         Ok(None) => {
-            println!("Another watcher is running; it will pick up the app.");
+            debug_log!("Another watcher is running; it will pick up the app.");
             return ExitCode::SUCCESS;
         }
         Err(e) => {
-            eprintln!("Failed to check for a running watcher: {e}");
+            debug_log!("Failed to check for a running watcher: {e}");
             return ExitCode::FAILURE;
         }
     };
 
     if let Err(e) = watcher::run() {
-        eprintln!("Watcher failed: {e}");
+        debug_log!("Watcher failed: {e}");
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
