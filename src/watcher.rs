@@ -355,10 +355,12 @@ mod tests {
     fn app_tree_skips_shared_services_and_other_apps() {
         let ps = vec![
             proc(100, 1, "Adobe Premiere Pro.exe"),
-            proc(101, 100, "dynamiclinkmanager.exe"),
+            proc(101, 100, "CEPHtmlEngine.exe"),
             proc(102, 100, "CoreSync.exe"),
             proc(103, 102, "node.exe"),
             proc(104, 100, "Adobe Media Encoder.exe"),
+            proc(105, 100, "dynamiclinkmanager.exe"),
+            proc(106, 105, "TeamProjectsLocalHub.exe"),
         ];
         let tree: Vec<u32> = app_tree(&ps, &ps[0]).iter().map(|p| p.pid).collect();
         assert_eq!(tree, vec![100, 101]);

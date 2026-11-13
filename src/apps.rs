@@ -13,11 +13,14 @@ pub const MAIN_APPS: &[&str] = &[
 ///
 /// They may be started as children of whichever app was launched first,
 /// but they serve all apps, so they are killed only when no app has windows left.
+/// `dynamiclinkmanager.exe` belongs here too: it outlives its parent app while
+/// another app uses it (e.g. Media Encoder rendering a Premiere project).
 pub const SHARED_SERVICES: &[&str] = &[
     "CoreSync.exe",
     "CCXProcess.exe",
     "CCLibrary.exe",
     "AdobeIPCBroker.exe",
+    "dynamiclinkmanager.exe",
 ];
 
 /// Checks whether `exe_name` is the main executable of a watched Adobe app.
